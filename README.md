@@ -153,12 +153,19 @@ For Python, hand the SDK a callable instead of a string. It is re-resolved per
 request and retried once on `401`, so a token that lapses mid-run is replaced:
 
 ```python
-import json, os, urllib.parse, urllib.request
+import base64, json, os, time, urllib.parse, urllib.request
 from feldera.rest.feldera_client import FelderaClient
 
+_cache: dict[str, tuple[str, float]] = {}
+REFRESH_MARGIN_S = 120.0
+
 def github_oidc_token() -> str:
+    audience = os.environ.get("FELDERA_OIDC_AUDIENCE", "")
+    cached = _cache.get(audience)
+    if cached is not None and time.time() < cached[1]:
+        return cached[0]
+
     url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
-    audience = os.environ.get("FELDERA_OIDC_AUDIENCE")
     if audience:
         url += "&audience=" + urllib.parse.quote(audience, safe="")
     request = urllib.request.Request(url)
@@ -166,10 +173,21 @@ def github_oidc_token() -> str:
         "Authorization", f"bearer {os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']}"
     )
     with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)["value"]
+        token = json.load(response)["value"]
+
+    payload = token.split(".")[1]
+    payload += "=" * (-len(payload) % 4)
+    exp = float(json.loads(base64.urlsafe_b64decode(payload))["exp"])
+    _cache[audience] = (token, exp - REFRESH_MARGIN_S)
+    return token
 
 client = FelderaClient(api_key=github_oidc_token)
 ```
+
+Cache the token. The client resolves the callable before *every* request, so
+minting one each time adds a round trip to GitHub per API call; a suite that
+polls in loops sends enough of them to be throttled, which arrives as a
+connection timeout rather than an error.
 
 The action exports `FELDERA_OIDC_AUDIENCE` alongside the token so the refresh
 asks for the audience the token was issued for.
