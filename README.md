@@ -4,7 +4,7 @@ Authenticate to a [Feldera](https://feldera.com) instance from GitHub Actions
 with the job's OIDC token, instead of a stored API key.
 
 ```yaml
-- uses: feldera/oidc-auth-action@<sha> # v1.0.0
+- uses: feldera/oidc-auth-action@<sha> # v1.1.0
 ```
 
 Pin the SHA rather than a tag: this action runs inside your job and handles a
@@ -29,16 +29,43 @@ jobs:
     env:
       FELDERA_HOST: https://feldera.example.com
     steps:
-      - uses: feldera/oidc-auth-action@<sha> # v1.0.0
+      - uses: feldera/oidc-auth-action@<sha> # v1.1.0
+        with:
+          host: https://feldera.example.com
 
-      - run: fda pipelines # FELDERA_API_KEY is set for every later step
+      - run: fda pipelines # FELDERA_HOST and FELDERA_API_KEY are already set
+```
+
+Given a host, the action reads `/v0/config` with the token before finishing. A
+missing or mismatched trust therefore fails this step, naming the host and the
+audience it presented, instead of surfacing as a `401` from whatever the job
+does next:
+
+```
+Authenticated to https://feldera.example.com (Feldera 0.327.0)
 ```
 
 #### Inputs
 
 | Input | Default | Meaning |
 |---|---|---|
+| `host` | `$FELDERA_HOST` | Feldera API URL. Exported as `FELDERA_HOST` and used to verify the token. With neither this nor the environment variable, the token is exported but nothing is verified. |
 | `audience` | `""` | Audience to request on the token. Empty means GitHub's default, the owning organization's URL. Set it where the trust identifies the workflow by audience rather than by a workflow-scoped subject claim. |
+
+#### Exports
+
+| Variable | Contents |
+|---|---|
+| `FELDERA_API_KEY` | The OIDC token, masked in logs |
+| `FELDERA_HOST` | The resolved host, when one is known |
+| `FELDERA_OIDC_AUDIENCE` | The audience the token was issued for, for clients that re-mint it |
+
+#### Instances on a self-signed certificate
+
+There is deliberately no input for skipping TLS verification. Set
+`FELDERA_TLS_INSECURE`, which the Feldera clients themselves read, at the job
+level; the verification request honours it. Prefer pointing `CURL_CA_BUNDLE` at
+the certificate authority wherever that is possible.
 
 ### 2. Register a trust on the instance
 
@@ -100,7 +127,7 @@ customized subject still starts with `repo:ORG/REPO`.
 workflow ask for its own audience and pin that on the trust:
 
 ```yaml
-- uses: feldera/oidc-auth-action@<sha> # v1.0.0
+- uses: feldera/oidc-auth-action@<sha> # v1.1.0
   with:
     audience: my-repo-integration-tests
 ```
@@ -158,6 +185,6 @@ in your dependency metadata, since nothing in that error names the client.
 | Symptom | Cause |
 |---|---|
 | `no OIDC token request URL` | The job is missing `permissions: id-token: write`. A reusable workflow also needs the *calling* job to grant it. |
-| `401` on the first request | No trust matches. Compare the token's `iss`, `sub` and `aud` against the trust; a subject pinned to one branch will not match another. |
+| The action fails with `rejected the token` | No trust matches. Compare the trust's `iss`, `sub` and `aud` against the token; a subject pinned to one branch will not match another. |
 | `401` partway through a long run | The token expired. Use a callable credential, above. |
 | `invalid API key` with a correct trust | A client older than 0.327.0 stringifying a callable credential. |

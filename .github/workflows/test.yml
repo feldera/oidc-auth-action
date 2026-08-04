@@ -66,3 +66,87 @@ jobs:
             echo "FELDERA_OIDC_AUDIENCE is '${FELDERA_OIDC_AUDIENCE-unset}', expected '$EXPECTED_AUDIENCE'" >&2
             exit 1
           fi
+
+  verification:
+    name: verification (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: instance accepts the token
+            status: 200
+            expect: pass
+          - name: instance rejects the token
+            status: 401
+            expect: fail
+          - name: instance errors
+            status: 500
+            expect: fail
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      # Stands in for a Feldera instance: the action only needs /v0/config to
+      # answer, so the status code is what decides the outcome under test.
+      - name: Start a stub instance answering ${{ matrix.status }}
+        env:
+          STUB_STATUS: ${{ matrix.status }}
+        run: |
+          set -euo pipefail
+          cat > stub.py <<'PY'
+          import json, os
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          STATUS = int(os.environ["STUB_STATUS"])
+
+          class Handler(BaseHTTPRequestHandler):
+              def log_message(self, *a):
+                  pass
+
+              def do_GET(self):
+                  if not (self.headers.get("Authorization") or "").startswith("Bearer "):
+                      body, status = {"message": "no credential"}, 401
+                  elif STATUS == 200:
+                      body, status = {"version": "9.9.9", "revision": "stub"}, 200
+                  else:
+                      body, status = {"message": "stub says no"}, STATUS
+                  payload = json.dumps(body).encode()
+                  self.send_response(status)
+                  self.send_header("Content-Length", str(len(payload)))
+                  self.end_headers()
+                  self.wfile.write(payload)
+
+          HTTPServer(("127.0.0.1", 8080), Handler).serve_forever()
+          PY
+          python3 stub.py &
+          for _ in $(seq 1 30); do
+            curl -sf -o /dev/null "http://127.0.0.1:8080/v0/config" -H "Authorization: Bearer x" && break
+            sleep 1
+          done
+
+      - id: auth
+        continue-on-error: true
+        uses: ./
+        with:
+          host: http://127.0.0.1:8080
+
+      - name: The step ${{ matrix.expect }}ed as expected
+        env:
+          EXPECTED: ${{ matrix.expect }}
+          OUTCOME: ${{ steps.auth.outcome }}
+        run: |
+          set -euo pipefail
+          case "$EXPECTED" in
+            pass)
+              [ "$OUTCOME" = "success" ] || { echo "expected success, got $OUTCOME" >&2; exit 1; }
+              [ "${FELDERA_HOST:-}" = "http://127.0.0.1:8080" ] || {
+                echo "FELDERA_HOST is '${FELDERA_HOST:-unset}'" >&2; exit 1; }
+              ;;
+            fail)
+              [ "$OUTCOME" = "failure" ] || { echo "expected failure, got $OUTCOME" >&2; exit 1; }
+              ;;
+          esac
+          echo "outcome=$OUTCOME as expected"

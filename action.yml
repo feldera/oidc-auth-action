@@ -1,14 +1,21 @@
 name: Feldera OIDC auth
 description: >-
-  Export this job's GitHub OIDC token as FELDERA_API_KEY. The Feldera instance
-  matches the token against a registered OIDC trust relationship, so the job
-  carries no stored credential and mints nothing.
+  Authenticate to Feldera with this job's GitHub OIDC token. Exports
+  FELDERA_HOST and FELDERA_API_KEY, and fails the step if the instance does not
+  accept the token, so a missing trust surfaces here rather than mid-run.
 author: Feldera
 branding:
   icon: shield
   color: blue
 
 inputs:
+  host:
+    description: >-
+      Feldera API URL. Exported as FELDERA_HOST and used to confirm the token is
+      accepted. Defaults to FELDERA_HOST from the environment; without either,
+      the token is exported but nothing is verified.
+    required: false
+    default: ""
   audience:
     description: >-
       Audience to request on the token. Leave empty for GitHub's default (the
@@ -24,6 +31,7 @@ runs:
       shell: bash
       env:
         FELDERA_AUTH_AUDIENCE: ${{ inputs.audience }}
+        FELDERA_AUTH_HOST: ${{ inputs.host }}
       run: |
         set -euo pipefail
         if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
@@ -60,4 +68,53 @@ runs:
         # Long-running clients re-mint the token themselves rather than let this
         # one expire mid-run, and they need the audience it was issued for.
         echo "FELDERA_OIDC_AUDIENCE=$FELDERA_AUTH_AUDIENCE" >> "$GITHUB_ENV"
-        echo "Authenticated with a GitHub OIDC token (aud ${FELDERA_AUTH_AUDIENCE:-default})"
+        echo "Requested a GitHub OIDC token (aud ${FELDERA_AUTH_AUDIENCE:-default})"
+
+        # The input wins over an inherited FELDERA_HOST so a job can point one
+        # step at a different instance without rewriting its env.
+        host="${FELDERA_AUTH_HOST:-${FELDERA_HOST:-}}"
+        if [ -z "$host" ]; then
+          echo "::notice::No host given and FELDERA_HOST is unset, so the token was not verified"
+          exit 0
+        fi
+        host="${host%/}"
+        echo "FELDERA_HOST=$host" >> "$GITHUB_ENV"
+
+        # No input for this on purpose. FELDERA_TLS_INSECURE is the variable the
+        # Feldera clients already read, so an instance on a self-signed
+        # certificate is configured once for the whole job rather than being
+        # offered as a per-step option here. Point CURL_CA_BUNDLE at the CA
+        # instead wherever that is possible.
+        curl_tls=()
+        case "${FELDERA_TLS_INSECURE:-}" in
+          1 | true | TRUE | yes | YES) curl_tls=(-k) ;;
+        esac
+
+        # Spend one request here to prove the instance accepts the token. The
+        # alternative is a 401 surfacing from whatever the job does next, which
+        # names neither the credential nor the trust that failed to match.
+        response=$(curl "${curl_tls[@]}" -sS -w '\n%{http_code}' \
+          -H "Authorization: Bearer $token" "$host/v0/config") || {
+          echo "ERROR: could not reach $host" >&2
+          exit 1
+        }
+        status=$(printf '%s' "$response" | tail -n1)
+        body=$(printf '%s' "$response" | sed '$d')
+
+        if [ "$status" = "401" ] || [ "$status" = "403" ]; then
+          echo "ERROR: $host rejected the token (HTTP $status): $body" >&2
+          echo "No OIDC trust on that instance matches this workflow's token." >&2
+          echo "Compare the trust's issuer, subject and audience against the token;" >&2
+          echo "this one carries aud '${FELDERA_AUTH_AUDIENCE:-https://github.com/${GITHUB_REPOSITORY_OWNER}}'." >&2
+          exit 1
+        fi
+        if [ "$status" != "200" ]; then
+          echo "ERROR: $host answered HTTP $status: $body" >&2
+          exit 1
+        fi
+
+        version=$(printf '%s' "$body" | sed -e 's/.*"version"[[:space:]]*:[[:space:]]*"//' -e 's/".*//')
+        case "$version" in
+          "" | *'{'* | *'"'*) echo "Authenticated to $host" ;;
+          *) echo "Authenticated to $host (Feldera $version)" ;;
+        esac
