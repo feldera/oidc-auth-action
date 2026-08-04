@@ -4,7 +4,7 @@ Authenticate to a [Feldera](https://feldera.com) instance from GitHub Actions
 with the job's OIDC token, instead of a stored API key.
 
 ```yaml
-- uses: feldera/oidc-auth-action@<sha> # v1.1.0
+- uses: feldera/oidc-auth-action@<sha> # v1.0.0
 ```
 
 Pin the SHA rather than a tag: this action runs inside your job and handles a
@@ -29,7 +29,7 @@ jobs:
     env:
       FELDERA_HOST: https://feldera.example.com
     steps:
-      - uses: feldera/oidc-auth-action@<sha> # v1.1.0
+      - uses: feldera/oidc-auth-action@<sha> # v1.0.0
         with:
           host: https://feldera.example.com
 
@@ -126,7 +126,7 @@ customized subject still starts with `repo:ORG/REPO`.
 workflow ask for its own audience and pin that on the trust:
 
 ```yaml
-- uses: feldera/oidc-auth-action@<sha> # v1.1.0
+- uses: feldera/oidc-auth-action@<sha> # v1.0.0
   with:
     audience: my-repo-integration-tests
 ```
