@@ -1,8 +1,9 @@
 name: Feldera OIDC auth
+# Marketplace rejects a description of 125 characters or more, so the detail
+# about what it exports and when it fails lives in the README instead.
 description: >-
-  Authenticate to Feldera with this job's GitHub OIDC token. Exports
-  FELDERA_HOST and FELDERA_API_KEY, and fails the step if the instance does not
-  accept the token, so a missing trust surfaces here rather than mid-run.
+  Authenticate to Feldera with the job's GitHub OIDC token. No stored API key;
+  verifies the instance accepts it.
 author: Feldera
 branding:
   icon: shield
