@@ -60,12 +60,11 @@ Authenticated to https://feldera.example.com (Feldera 0.327.0)
 | `FELDERA_HOST` | The resolved host, when one is known |
 | `FELDERA_OIDC_AUDIENCE` | The audience the token was issued for, for clients that re-mint it |
 
-#### Instances on a self-signed certificate
+#### Certificates
 
-There is deliberately no input for skipping TLS verification. Set
-`FELDERA_TLS_INSECURE`, which the Feldera clients themselves read, at the job
-level; the verification request honours it. Prefer pointing `CURL_CA_BUNDLE` at
-the certificate authority wherever that is possible.
+TLS is always verified, and there is deliberately no option to skip it. Where an
+instance presents a certificate from an internal authority, point
+`CURL_CA_BUNDLE` at that authority for the job.
 
 ### 2. Register a trust on the instance
 

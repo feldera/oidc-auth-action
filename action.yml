@@ -80,20 +80,12 @@ runs:
         host="${host%/}"
         echo "FELDERA_HOST=$host" >> "$GITHUB_ENV"
 
-        # No input for this on purpose. FELDERA_TLS_INSECURE is the variable the
-        # Feldera clients already read, so an instance on a self-signed
-        # certificate is configured once for the whole job rather than being
-        # offered as a per-step option here. Point CURL_CA_BUNDLE at the CA
-        # instead wherever that is possible.
-        curl_tls=()
-        case "${FELDERA_TLS_INSECURE:-}" in
-          1 | true | TRUE | yes | YES) curl_tls=(-k) ;;
-        esac
-
         # Spend one request here to prove the instance accepts the token. The
         # alternative is a 401 surfacing from whatever the job does next, which
         # names neither the credential nor the trust that failed to match.
-        response=$(curl "${curl_tls[@]}" -sS -w '\n%{http_code}' \
+        # TLS is always verified; point CURL_CA_BUNDLE at an internal authority
+        # if the instance does not present a publicly trusted certificate.
+        response=$(curl -sS -w '\n%{http_code}' \
           -H "Authorization: Bearer $token" "$host/v0/config") || {
           echo "ERROR: could not reach $host" >&2
           exit 1
