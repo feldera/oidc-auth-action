@@ -1,0 +1,68 @@
+name: Test
+
+# Exercises the action end to end without a Feldera instance: it only talks to
+# the runner's own token endpoint, so the job can mint a token and check what
+# came back.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  oidc-auth:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default audience
+            audience: ""
+          - name: custom audience
+            audience: feldera-oidc-auth-selftest
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      - uses: ./
+        with:
+          audience: ${{ matrix.audience }}
+
+      - name: A JWT was exported for the requested audience
+        env:
+          EXPECTED_AUDIENCE: ${{ matrix.audience }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${FELDERA_API_KEY:-}" ]; then
+            echo "FELDERA_API_KEY was not exported" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$FELDERA_API_KEY" |
+            grep -qE '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'; then
+            echo "FELDERA_API_KEY is not a three-segment JWT" >&2
+            exit 1
+          fi
+
+          # An empty input means GitHub's default audience, the owning org's URL.
+          expected="${EXPECTED_AUDIENCE:-https://github.com/${GITHUB_REPOSITORY_OWNER}}"
+          decode='import base64,json,sys; p=sys.stdin.read().strip(); p += "=" * (-len(p) % 4); print(json.loads(base64.urlsafe_b64decode(p))["aud"])'
+          actual=$(printf '%s' "$FELDERA_API_KEY" | cut -d. -f2 | python3 -c "$decode")
+
+          if [ "$actual" != "$expected" ]; then
+            echo "aud is '$actual', expected '$expected'" >&2
+            exit 1
+          fi
+          echo "aud=$actual"
+
+          if [ "${FELDERA_OIDC_AUDIENCE-unset}" != "$EXPECTED_AUDIENCE" ]; then
+            echo "FELDERA_OIDC_AUDIENCE is '${FELDERA_OIDC_AUDIENCE-unset}', expected '$EXPECTED_AUDIENCE'" >&2
+            exit 1
+          fi

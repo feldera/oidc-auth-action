@@ -1,0 +1,63 @@
+name: Feldera OIDC auth
+description: >-
+  Export this job's GitHub OIDC token as FELDERA_API_KEY. The Feldera instance
+  matches the token against a registered OIDC trust relationship, so the job
+  carries no stored credential and mints nothing.
+author: Feldera
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  audience:
+    description: >-
+      Audience to request on the token. Leave empty for GitHub's default (the
+      owning org's URL). Set it where the trust identifies the workflow by
+      audience rather than by a workflow-scoped subject claim.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Request GitHub OIDC token
+      shell: bash
+      env:
+        FELDERA_AUTH_AUDIENCE: ${{ inputs.audience }}
+      run: |
+        set -euo pipefail
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+          echo "ERROR: no OIDC token request URL; the job needs permissions: id-token: write" >&2
+          exit 1
+        fi
+
+        # Without an audience the default `aud` is the owning org's URL, which
+        # is what the subject-scoped trusts pin.
+        token_url="$ACTIONS_ID_TOKEN_REQUEST_URL"
+        if [ -n "$FELDERA_AUTH_AUDIENCE" ]; then
+          # Kept to characters that need no URL escaping, so this stays free of
+          # jq and python: the job containers are not guaranteed to have either.
+          if ! printf '%s' "$FELDERA_AUTH_AUDIENCE" | grep -qE '^[A-Za-z0-9._~:-]+$'; then
+            echo "ERROR: audience '$FELDERA_AUTH_AUDIENCE' has characters that need escaping" >&2
+            exit 1
+          fi
+          token_url="${token_url}&audience=${FELDERA_AUTH_AUDIENCE}"
+        fi
+
+        response=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$token_url")
+        # A JWT is base64url plus dots, so there is no JSON string escaping to
+        # undo. Allow whitespace around the colon rather than assuming compact
+        # JSON, and confirm the result really is a three-segment token: a
+        # partial match here would otherwise sail on as a bogus credential.
+        token=$(printf '%s' "$response" | sed -e 's/.*"value"[[:space:]]*:[[:space:]]*"//' -e 's/".*//')
+        if ! printf '%s' "$token" | grep -qE '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'; then
+          echo "ERROR: no JWT in GitHub's OIDC response" >&2
+          exit 1
+        fi
+
+        echo "::add-mask::$token"
+        echo "FELDERA_API_KEY=$token" >> "$GITHUB_ENV"
+        # Long-running clients re-mint the token themselves rather than let this
+        # one expire mid-run, and they need the audience it was issued for.
+        echo "FELDERA_OIDC_AUDIENCE=$FELDERA_AUTH_AUDIENCE" >> "$GITHUB_ENV"
+        echo "Authenticated with a GitHub OIDC token (aud ${FELDERA_AUTH_AUDIENCE:-default})"
