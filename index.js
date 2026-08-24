@@ -4,10 +4,10 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { mintToken, tokenFileFor, writeToken, exportVariable, saveState, mask } = require("./oidc");
 
-// A GitHub OIDC token lives five minutes. Re-minting every 150 seconds leaves
-// every reader at least that much of the token's life, and costs 22 requests
-// across a one-hour job.
-const REFRESH_SECONDS = 150;
+// A GitHub OIDC token lives five minutes. Re-minting every four leaves every
+// reader at least a minute of the token's life, and costs 15 requests across a
+// one-hour job.
+const REFRESH_SECONDS = 240;
 
 async function verify(host, token, audience) {
   let response;
