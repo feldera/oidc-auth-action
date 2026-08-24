@@ -4,6 +4,17 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
+// A GitHub OIDC token lives five minutes. Re-minting every four leaves every
+// reader at least a minute of the token's life, and costs 15 requests across a
+// one-hour job.
+const REFRESH_SECONDS = 240;
+
+// Six hours of refreshing bounds a loop whose post step never ran, on a runner
+// killed hard enough to skip cleanup but not hard enough to take the process
+// with it. Expressed as a duration, so changing the interval cannot quietly
+// change the ceiling.
+const MAX_REFRESH_SECONDS = 6 * 60 * 60;
+
 // A JWT is base64url plus dots. Anything else means GitHub answered with
 // something other than a token, which must not travel on as a credential.
 const JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -64,4 +75,13 @@ function mask(value) {
   console.log(`::add-mask::${value}`);
 }
 
-module.exports = { mintToken, tokenFileFor, writeToken, exportVariable, saveState, mask };
+module.exports = {
+  REFRESH_SECONDS,
+  MAX_REFRESH_SECONDS,
+  mintToken,
+  tokenFileFor,
+  writeToken,
+  exportVariable,
+  saveState,
+  mask,
+};

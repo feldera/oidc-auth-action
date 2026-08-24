@@ -1,18 +1,15 @@
 "use strict";
 
 const fs = require("node:fs");
-const { mintToken, writeToken } = require("./oidc");
-
-// Six hours bounds a loop whose post step never ran, on a runner killed hard
-// enough to skip cleanup but not hard enough to take the process with it.
-const MAX_REFRESHES = 144;
+const { REFRESH_SECONDS, MAX_REFRESH_SECONDS, mintToken, writeToken } = require("./oidc");
 
 async function main() {
   const tokenFile = process.env.FELDERA_OIDC_TOKEN_FILE;
   const audience = process.env.FELDERA_OIDC_AUDIENCE || "";
-  const seconds = Number(process.env.FELDERA_OIDC_REFRESH_SECONDS || 150);
+  const seconds = Number(process.env.FELDERA_OIDC_REFRESH_SECONDS || REFRESH_SECONDS);
+  const maxRefreshes = Math.ceil(MAX_REFRESH_SECONDS / seconds);
 
-  for (let refresh = 0; refresh < MAX_REFRESHES; refresh++) {
+  for (let refresh = 0; refresh < maxRefreshes; refresh++) {
     await new Promise((done) => setTimeout(done, seconds * 1000));
     // The post step removes the file, which is also how it says stop.
     if (!fs.existsSync(tokenFile)) return;
