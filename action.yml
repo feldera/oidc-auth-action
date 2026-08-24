@@ -26,85 +26,9 @@ inputs:
     default: ""
 
 runs:
-  using: composite
-  steps:
-    - name: Wire up the Feldera OIDC credential
-      shell: bash
-      env:
-        FELDERA_AUTH_AUDIENCE: ${{ inputs.audience }}
-        FELDERA_AUTH_HOST: ${{ inputs.host }}
-      run: |
-        set -euo pipefail
-        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-          echo "ERROR: no OIDC token request URL; the job needs permissions: id-token: write" >&2
-          exit 1
-        fi
-
-        # The runner keeps the action's directory for the rest of the run, so
-        # the exported command still resolves from later steps.
-        mint="$GITHUB_ACTION_PATH/mint-token.sh"
-
-        # Minting here validates the audience, warms the cache the job's later
-        # calls read, and gives the verification below its token.
-        token=$("$mint" "$FELDERA_AUTH_AUDIENCE")
-        echo "::add-mask::$token"
-
-        # A GitHub OIDC token lives five minutes, well inside the runtime of a
-        # long job, so the credential handed to clients is the command rather
-        # than the token: fda re-runs it per invocation and picks up a fresh
-        # token. The audience travels as an argument, so two steps can ask for
-        # different ones without fighting over FELDERA_OIDC_AUDIENCE.
-        {
-          echo "FELDERA_AUTH_TOKEN_COMMAND=$mint $FELDERA_AUTH_AUDIENCE"
-          # Clients that mint their own token need the audience this one carries.
-          echo "FELDERA_OIDC_AUDIENCE=$FELDERA_AUTH_AUDIENCE"
-        } >> "$GITHUB_ENV"
-        echo "Wired FELDERA_AUTH_TOKEN_COMMAND (aud ${FELDERA_AUTH_AUDIENCE:-default})"
-
-        # No FELDERA_API_KEY is exported: a token in the environment outlives
-        # its own five minutes and reaches every later step and third-party
-        # action in the job.
-        if [ -n "${FELDERA_API_KEY:-}" ]; then
-          echo "::warning::FELDERA_API_KEY is set in this job; older fda releases refuse it next to FELDERA_AUTH_TOKEN_COMMAND"
-        fi
-
-        # The input wins over an inherited FELDERA_HOST so a job can point one
-        # step at a different instance without rewriting its env.
-        host="${FELDERA_AUTH_HOST:-${FELDERA_HOST:-}}"
-        if [ -z "$host" ]; then
-          echo "::notice::No host given and FELDERA_HOST is unset, so the token was not verified"
-          exit 0
-        fi
-        host="${host%/}"
-        echo "FELDERA_HOST=$host" >> "$GITHUB_ENV"
-
-        # Spend one request here to prove the instance accepts the token. The
-        # alternative is a 401 surfacing from whatever the job does next, which
-        # names neither the credential nor the trust that failed to match.
-        # TLS is always verified; point CURL_CA_BUNDLE at an internal authority
-        # if the instance does not present a publicly trusted certificate.
-        response=$(curl -sS -w '\n%{http_code}' \
-          -H "Authorization: Bearer $token" "$host/v0/config") || {
-          echo "ERROR: could not reach $host" >&2
-          exit 1
-        }
-        status=$(printf '%s' "$response" | tail -n1)
-        body=$(printf '%s' "$response" | sed '$d')
-
-        if [ "$status" = "401" ] || [ "$status" = "403" ]; then
-          echo "ERROR: $host rejected the token (HTTP $status): $body" >&2
-          echo "No OIDC trust on that instance matches this workflow's token." >&2
-          echo "Compare the trust's issuer, subject and audience against the token;" >&2
-          echo "this one carries aud '${FELDERA_AUTH_AUDIENCE:-https://github.com/${GITHUB_REPOSITORY_OWNER}}'." >&2
-          exit 1
-        fi
-        if [ "$status" != "200" ]; then
-          echo "ERROR: $host answered HTTP $status: $body" >&2
-          exit 1
-        fi
-
-        version=$(printf '%s' "$body" | sed -e 's/.*"version"[[:space:]]*:[[:space:]]*"//' -e 's/".*//')
-        case "$version" in
-          "" | *'{'* | *'"'*) echo "Authenticated to $host" ;;
-          *) echo "Authenticated to $host (Feldera $version)" ;;
-        esac
+  using: node24
+  main: index.js
+  # Removes the token file and stops the refresher even when the job failed or
+  # was cancelled, which is the only place a composite action could not reach.
+  post: post.js
+  post-if: always()
