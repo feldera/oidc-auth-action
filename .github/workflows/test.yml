@@ -35,26 +35,35 @@ jobs:
         with:
           audience: ${{ matrix.audience }}
 
-      - name: A JWT was exported for the requested audience
+      - name: The token command mints a JWT for the requested audience
         env:
           EXPECTED_AUDIENCE: ${{ matrix.audience }}
         run: |
           set -euo pipefail
 
-          if [ -z "${FELDERA_API_KEY:-}" ]; then
-            echo "FELDERA_API_KEY was not exported" >&2
+          # The credential is the command, not a token in the environment.
+          if [ -n "${FELDERA_API_KEY:-}" ]; then
+            echo "FELDERA_API_KEY was exported" >&2
             exit 1
           fi
-          if ! printf '%s' "$FELDERA_API_KEY" |
+          if [ -z "${FELDERA_AUTH_TOKEN_COMMAND:-}" ]; then
+            echo "FELDERA_AUTH_TOKEN_COMMAND was not exported" >&2
+            exit 1
+          fi
+
+          # Unquoted on purpose: the value is a command line, script plus audience.
+          # shellcheck disable=SC2086
+          token=$($FELDERA_AUTH_TOKEN_COMMAND)
+          if ! printf '%s' "$token" |
             grep -qE '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'; then
-            echo "FELDERA_API_KEY is not a three-segment JWT" >&2
+            echo "the token command printed no JWT" >&2
             exit 1
           fi
 
           # An empty input means GitHub's default audience, the owning org's URL.
           expected="${EXPECTED_AUDIENCE:-https://github.com/${GITHUB_REPOSITORY_OWNER}}"
           decode='import base64,json,sys; p=sys.stdin.read().strip(); p += "=" * (-len(p) % 4); print(json.loads(base64.urlsafe_b64decode(p))["aud"])'
-          actual=$(printf '%s' "$FELDERA_API_KEY" | cut -d. -f2 | python3 -c "$decode")
+          actual=$(printf '%s' "$token" | cut -d. -f2 | python3 -c "$decode")
 
           if [ "$actual" != "$expected" ]; then
             echo "aud is '$actual', expected '$expected'" >&2
@@ -64,6 +73,24 @@ jobs:
 
           if [ "${FELDERA_OIDC_AUDIENCE-unset}" != "$EXPECTED_AUDIENCE" ]; then
             echo "FELDERA_OIDC_AUDIENCE is '${FELDERA_OIDC_AUDIENCE-unset}', expected '$EXPECTED_AUDIENCE'" >&2
+            exit 1
+          fi
+
+          # Cached, and readable by nobody else: fda runs the command per
+          # invocation, and the Actions OIDC endpoint rate limits per job.
+          cache="$RUNNER_TEMP/feldera-oidc-${EXPECTED_AUDIENCE:-default}.jwt"
+          if [ ! -s "$cache" ]; then
+            echo "no cached token at $cache" >&2
+            exit 1
+          fi
+          mode=$(stat -c %a "$cache")
+          if [ "$mode" != "600" ]; then
+            echo "cache file mode is $mode, expected 600" >&2
+            exit 1
+          fi
+          # shellcheck disable=SC2086
+          if [ "$($FELDERA_AUTH_TOKEN_COMMAND)" != "$token" ]; then
+            echo "the second call re-minted instead of reading the cache" >&2
             exit 1
           fi
 

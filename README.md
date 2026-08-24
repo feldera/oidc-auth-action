@@ -4,20 +4,19 @@ Authenticate to a [Feldera](https://feldera.com) instance from GitHub Actions
 with the job's OIDC token, instead of a stored API key.
 
 ```yaml
-- uses: feldera/oidc-auth-action@<sha> # v1.0.0
+- uses: feldera/oidc-auth-action@<sha> # v2.0.0
 ```
 
 Pin the SHA rather than a tag: this action runs inside your job and handles a
 credential.
 
-Requests the workflow job's GitHub OIDC token and exports it as
-`FELDERA_API_KEY`, which every Feldera client reads. The token is the
-credential: nothing is stored in repository secrets and no API key is created.
+Exports `FELDERA_AUTH_TOKEN_COMMAND`, a command that mints the job's GitHub
+OIDC token, which `fda` runs once per invocation.
 
 It takes two sides to work, and both are described below. Only the first lives
 in your workflow; skipping the second is the usual reason a job gets a `401`.
 
-### 1. Ask for the token
+### 1. Wire up the credential
 
 ```yaml
 jobs:
@@ -29,11 +28,11 @@ jobs:
     env:
       FELDERA_HOST: https://feldera.example.com
     steps:
-      - uses: feldera/oidc-auth-action@<sha> # v1.0.0
+      - uses: feldera/oidc-auth-action@<sha> # v2.0.0
         with:
           host: https://feldera.example.com
 
-      - run: fda pipelines # FELDERA_HOST and FELDERA_API_KEY are already set
+      - run: fda pipelines # FELDERA_HOST and the token command are already set
 ```
 
 Given a host, the action reads `/v0/config` with the token before finishing. A
@@ -49,16 +48,16 @@ Authenticated to https://feldera.example.com (Feldera 0.327.0)
 
 | Input | Default | Meaning |
 |---|---|---|
-| `host` | `$FELDERA_HOST` | Feldera API URL. Exported as `FELDERA_HOST` and used to verify the token. With neither this nor the environment variable, the token is exported but nothing is verified. |
+| `host` | `$FELDERA_HOST` | Feldera API URL. Exported as `FELDERA_HOST` and used to verify the token. With neither this nor the environment variable, the credential is wired up but nothing is verified. |
 | `audience` | `""` | Audience to request on the token. Empty means GitHub's default, the owning organization's URL. Set it where the trust identifies the workflow by audience rather than by a workflow-scoped subject claim. |
 
 #### Exports
 
 | Variable | Contents |
 |---|---|
-| `FELDERA_API_KEY` | The OIDC token, masked in logs |
+| `FELDERA_AUTH_TOKEN_COMMAND` | Path to the mint script plus the audience. `fda` reads it directly; other clients run it themselves |
 | `FELDERA_HOST` | The resolved host, when one is known |
-| `FELDERA_OIDC_AUDIENCE` | The audience the token was issued for, for clients that re-mint it |
+| `FELDERA_OIDC_AUDIENCE` | The audience the tokens carry, for clients that mint their own |
 
 #### Certificates
 
@@ -126,7 +125,7 @@ customized subject still starts with `repo:ORG/REPO`.
 workflow ask for its own audience and pin that on the trust:
 
 ```yaml
-- uses: feldera/oidc-auth-action@<sha> # v1.0.0
+- uses: feldera/oidc-auth-action@<sha> # v2.0.0
   with:
     audience: my-repo-integration-tests
 ```
@@ -143,54 +142,29 @@ This is weaker: any workflow in the repository can request any audience, so it
 distinguishes workflows without enforcing the boundary the way a subject claim
 does.
 
-## Token lifetime in long jobs
+## Other clients
 
-A GitHub OIDC token expires well inside the runtime of a long test job, and the
-instance checks `exp` on every request. A fixed token therefore starts failing
-partway through a run that outlives it.
+`fda` reads `FELDERA_AUTH_TOKEN_COMMAND` itself. Anything else runs the command
+the same way the action does:
 
-For Python, hand the SDK a callable instead of a string. It is re-resolved per
+```bash
+curl -H "Authorization: Bearer $($FELDERA_AUTH_TOKEN_COMMAND)" "$FELDERA_HOST/v0/config"
+```
+
+For Python, hand the SDK a callable rather than a string. It is re-resolved per
 request and retried once on `401`, so a token that lapses mid-run is replaced:
 
 ```python
-import base64, json, os, time, urllib.parse, urllib.request
+import os, subprocess
 from feldera.rest.feldera_client import FelderaClient
 
-_cache: dict[str, tuple[str, float]] = {}
-REFRESH_MARGIN_S = 120.0
-
 def github_oidc_token() -> str:
-    audience = os.environ.get("FELDERA_OIDC_AUDIENCE", "")
-    cached = _cache.get(audience)
-    if cached is not None and time.time() < cached[1]:
-        return cached[0]
-
-    url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
-    if audience:
-        url += "&audience=" + urllib.parse.quote(audience, safe="")
-    request = urllib.request.Request(url)
-    request.add_header(
-        "Authorization", f"bearer {os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']}"
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        token = json.load(response)["value"]
-
-    payload = token.split(".")[1]
-    payload += "=" * (-len(payload) % 4)
-    exp = float(json.loads(base64.urlsafe_b64decode(payload))["exp"])
-    _cache[audience] = (token, exp - REFRESH_MARGIN_S)
-    return token
+    command = os.environ["FELDERA_AUTH_TOKEN_COMMAND"]
+    return subprocess.run(command, shell=True, capture_output=True, text=True,
+                          check=True, timeout=30).stdout.strip()
 
 client = FelderaClient(api_key=github_oidc_token)
 ```
-
-Cache the token. The client resolves the callable before *every* request, so
-minting one each time adds a round trip to GitHub per API call; a suite that
-polls in loops sends enough of them to be throttled, which arrives as a
-connection timeout rather than an error.
-
-The action exports `FELDERA_OIDC_AUDIENCE` alongside the token so the refresh
-asks for the audience the token was issued for.
 
 Callable credentials need `feldera >= 0.327.0`. Earlier clients format the
 callable into the `Authorization` header instead of calling it, which reaches
@@ -203,5 +177,6 @@ in your dependency metadata, since nothing in that error names the client.
 |---|---|
 | `no OIDC token request URL` | The job is missing `permissions: id-token: write`. A reusable workflow also needs the *calling* job to grant it. |
 | The action fails with `rejected the token` | No trust matches. Compare the trust's `iss`, `sub` and `aud` against the token; a subject pinned to one branch will not match another. |
-| `401` partway through a long run | The token expired. Use a callable credential, above. |
+| `401` partway through a long run | A client held one token instead of running the command per request. |
+| `cannot be used with '--auth-token-command'` | The job also sets `FELDERA_API_KEY`, and this `fda` predates the precedence rule. |
 | `invalid API key` with a correct trust | A client older than 0.327.0 stringifying a callable credential. |

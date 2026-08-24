@@ -2,8 +2,8 @@ name: Feldera OIDC auth
 # Marketplace rejects a description of 125 characters or more, so the detail
 # about what it exports and when it fails lives in the README instead.
 description: >-
-  Authenticate to Feldera with the job's GitHub OIDC token. No stored API key;
-  verifies the instance accepts it.
+  Authenticate to Feldera with the job's GitHub OIDC token: no stored API key,
+  and it refreshes as the job runs.
 author: Feldera
 branding:
   icon: shield
@@ -14,7 +14,7 @@ inputs:
     description: >-
       Feldera API URL. Exported as FELDERA_HOST and used to confirm the token is
       accepted. Defaults to FELDERA_HOST from the environment; without either,
-      the token is exported but nothing is verified.
+      the credential is wired up but nothing is verified.
     required: false
     default: ""
   audience:
@@ -28,7 +28,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Request GitHub OIDC token
+    - name: Wire up the Feldera OIDC credential
       shell: bash
       env:
         FELDERA_AUTH_AUDIENCE: ${{ inputs.audience }}
@@ -40,36 +40,33 @@ runs:
           exit 1
         fi
 
-        # Without an audience the default `aud` is the owning org's URL, which
-        # is what the subject-scoped trusts pin.
-        token_url="$ACTIONS_ID_TOKEN_REQUEST_URL"
-        if [ -n "$FELDERA_AUTH_AUDIENCE" ]; then
-          # Kept to characters that need no URL escaping, so this stays free of
-          # jq and python: the job containers are not guaranteed to have either.
-          if ! printf '%s' "$FELDERA_AUTH_AUDIENCE" | grep -qE '^[A-Za-z0-9._~:-]+$'; then
-            echo "ERROR: audience '$FELDERA_AUTH_AUDIENCE' has characters that need escaping" >&2
-            exit 1
-          fi
-          token_url="${token_url}&audience=${FELDERA_AUTH_AUDIENCE}"
-        fi
+        # The runner keeps the action's directory for the rest of the run, so
+        # the exported command still resolves from later steps.
+        mint="$GITHUB_ACTION_PATH/mint-token.sh"
 
-        response=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$token_url")
-        # A JWT is base64url plus dots, so there is no JSON string escaping to
-        # undo. Allow whitespace around the colon rather than assuming compact
-        # JSON, and confirm the result really is a three-segment token: a
-        # partial match here would otherwise sail on as a bogus credential.
-        token=$(printf '%s' "$response" | sed -e 's/.*"value"[[:space:]]*:[[:space:]]*"//' -e 's/".*//')
-        if ! printf '%s' "$token" | grep -qE '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'; then
-          echo "ERROR: no JWT in GitHub's OIDC response" >&2
-          exit 1
-        fi
-
+        # Minting here validates the audience, warms the cache the job's later
+        # calls read, and gives the verification below its token.
+        token=$("$mint" "$FELDERA_AUTH_AUDIENCE")
         echo "::add-mask::$token"
-        echo "FELDERA_API_KEY=$token" >> "$GITHUB_ENV"
-        # Long-running clients re-mint the token themselves rather than let this
-        # one expire mid-run, and they need the audience it was issued for.
-        echo "FELDERA_OIDC_AUDIENCE=$FELDERA_AUTH_AUDIENCE" >> "$GITHUB_ENV"
-        echo "Requested a GitHub OIDC token (aud ${FELDERA_AUTH_AUDIENCE:-default})"
+
+        # A GitHub OIDC token lives five minutes, well inside the runtime of a
+        # long job, so the credential handed to clients is the command rather
+        # than the token: fda re-runs it per invocation and picks up a fresh
+        # token. The audience travels as an argument, so two steps can ask for
+        # different ones without fighting over FELDERA_OIDC_AUDIENCE.
+        {
+          echo "FELDERA_AUTH_TOKEN_COMMAND=$mint $FELDERA_AUTH_AUDIENCE"
+          # Clients that mint their own token need the audience this one carries.
+          echo "FELDERA_OIDC_AUDIENCE=$FELDERA_AUTH_AUDIENCE"
+        } >> "$GITHUB_ENV"
+        echo "Wired FELDERA_AUTH_TOKEN_COMMAND (aud ${FELDERA_AUTH_AUDIENCE:-default})"
+
+        # No FELDERA_API_KEY is exported: a token in the environment outlives
+        # its own five minutes and reaches every later step and third-party
+        # action in the job.
+        if [ -n "${FELDERA_API_KEY:-}" ]; then
+          echo "::warning::FELDERA_API_KEY is set in this job; older fda releases refuse it next to FELDERA_AUTH_TOKEN_COMMAND"
+        fi
 
         # The input wins over an inherited FELDERA_HOST so a job can point one
         # step at a different instance without rewriting its env.
