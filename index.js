@@ -57,14 +57,12 @@ async function main() {
   // step that rebuilds its environment still reads it (claude-code-action
   // deletes ACTIONS_ID_TOKEN_REQUEST_* so an agent cannot mint), and nothing
   // downstream can ask for a different audience.
-  const read = process.platform === "win32" ? `type ${tokenFile}` : `cat ${tokenFile}`;
-  exportVariable("FELDERA_AUTH_TOKEN_COMMAND", read);
   exportVariable("FELDERA_OIDC_TOKEN_FILE", tokenFile);
   exportVariable("FELDERA_OIDC_AUDIENCE", audience);
 
   if (process.env.FELDERA_API_KEY) {
     console.log(
-      "::warning::FELDERA_API_KEY is set in this job; older fda releases refuse it next to FELDERA_AUTH_TOKEN_COMMAND",
+      "::warning::FELDERA_API_KEY is set in this job; fda takes one credential and refuses it next to FELDERA_OIDC_TOKEN_FILE",
     );
   }
 
@@ -84,7 +82,7 @@ async function main() {
   saveState("refresherPid", String(refresher.pid));
   saveState("tokenFile", tokenFile);
   console.log(
-    `Wired FELDERA_AUTH_TOKEN_COMMAND (aud ${audience || "default"}), re-minting every ${REFRESH_SECONDS}s`,
+    `Wired FELDERA_OIDC_TOKEN_FILE (aud ${audience || "default"}), re-minting every ${REFRESH_SECONDS}s`,
   );
 
   // The input wins over an inherited FELDERA_HOST so a job can point one step

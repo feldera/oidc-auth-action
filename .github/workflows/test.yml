@@ -46,8 +46,8 @@ jobs:
             echo "FELDERA_API_KEY was exported" >&2
             exit 1
           fi
-          if [ -z "${FELDERA_AUTH_TOKEN_COMMAND:-}" ]; then
-            echo "FELDERA_AUTH_TOKEN_COMMAND was not exported" >&2
+          if [ -n "${FELDERA_AUTH_TOKEN_COMMAND:-}" ]; then
+            echo "FELDERA_AUTH_TOKEN_COMMAND was exported" >&2
             exit 1
           fi
           if [ -z "${FELDERA_OIDC_TOKEN_FILE:-}" ]; then
@@ -55,12 +55,10 @@ jobs:
             exit 1
           fi
 
-          # Unquoted on purpose: the value is a command line, `cat` plus a path.
-          # shellcheck disable=SC2086
-          token=$($FELDERA_AUTH_TOKEN_COMMAND)
+          token=$(cat "$FELDERA_OIDC_TOKEN_FILE")
           if ! printf '%s' "$token" |
             grep -qE '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'; then
-            echo "the token command printed no JWT" >&2
+            echo "the token file holds no JWT" >&2
             exit 1
           fi
 

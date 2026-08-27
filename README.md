@@ -4,13 +4,13 @@ Authenticate with [Feldera](https://feldera.com) instances from GitHub Actions
 using the job's OIDC token.
 
 ```yaml
-- uses: feldera/oidc-auth-action@<sha> # v3.0.0
+- uses: feldera/oidc-auth-action@<sha> # v4.0.0
 ```
 
 Mints the job's GitHub OIDC token and refreshes it for as long as the
-job runs. Configures `FELDERA_AUTH_TOKEN_COMMAND` to read it.
-This means `fda` is automatically authenticated after this action
-has finished.
+job runs. Exports `FELDERA_OIDC_TOKEN_FILE`, the path of the file that
+holds it. `fda` (0.339.0 or later) reads that file on every invocation,
+so it is authenticated as soon as this action has finished.
 
 Setup: First in your YAML and second adding your trust credentials
 in the instance.
@@ -27,7 +27,7 @@ jobs:
     env:
       FELDERA_HOST: https://feldera.example.com
     steps:
-      - uses: feldera/oidc-auth-action@<sha> # v3.0.0
+      - uses: feldera/oidc-auth-action@<sha> # v4.0.0
         with:
           host: https://feldera.example.com
 
@@ -46,8 +46,7 @@ jobs:
 
 | Variable | Contents |
 |---|---|
-| `FELDERA_AUTH_TOKEN_COMMAND` | `cat <token file>`. `fda` reads this directly; other clients run it themselves. |
-| `FELDERA_OIDC_TOKEN_FILE` | Path to token file itself, for clients that want to read it directly. |
+| `FELDERA_OIDC_TOKEN_FILE` | Path of the token file, mode 0600, rewritten atomically on every refresh. `fda` reads it directly; other clients read it per request. |
 | `FELDERA_HOST` | The resolved host, when one is known. |
 | `FELDERA_OIDC_AUDIENCE` | The audience the tokens carry. |
 
@@ -116,7 +115,7 @@ customized subject still starts with `repo:ORG/REPO`.
 workflow ask for its own audience and pin that on the trust:
 
 ```yaml
-- uses: feldera/oidc-auth-action@<sha> # v3.0.0
+- uses: feldera/oidc-auth-action@<sha> # v4.0.0
   with:
     audience: my-repo-integration-tests
 ```
@@ -134,11 +133,11 @@ workflows without enforcing the boundary the way a subject claim does.
 
 ## Other clients
 
-`fda` reads `FELDERA_AUTH_TOKEN_COMMAND` itself. Anything else runs the command,
-or reads `FELDERA_OIDC_TOKEN_FILE` directly:
+`fda` reads `FELDERA_OIDC_TOKEN_FILE` itself. Anything else reads the file,
+once per request rather than once per job:
 
 ```bash
-curl -H "Authorization: Bearer $($FELDERA_AUTH_TOKEN_COMMAND)" "$FELDERA_HOST/v0/config"
+curl -H "Authorization: Bearer $(cat "$FELDERA_OIDC_TOKEN_FILE")" "$FELDERA_HOST/v0/config"
 ```
 
 For Python, hand the SDK a callable rather than a string. It is re-resolved per
@@ -161,5 +160,6 @@ client = FelderaClient(api_key=github_oidc_token)
 | `no OIDC token request URL` | The job is missing `permissions: id-token: write`. A reusable workflow also needs the *calling* job to grant it. |
 | The action fails with `rejected the token` | No trust matches. Compare the trust's `iss`, `sub` and `aud` against the token; a subject pinned to one branch will not match another. |
 | `401` partway through a long run | A client read the file once instead of per request. |
-| `cannot be used with '--auth-token-command'` | The job also sets `FELDERA_API_KEY`, and this `fda` predates the precedence rule. |
+| `401` from every `fda` call, with a correct trust | An `fda` older than 0.339.0, which reads `FELDERA_AUTH_TOKEN_COMMAND` (v3 of this action) and not the file. |
+| `cannot be used with '--oidc-token-file'` | The job also sets `FELDERA_API_KEY`; `fda` takes one credential. |
 | `invalid API key` with a correct trust | A client older than 0.327.0 stringifying a callable credential. |
