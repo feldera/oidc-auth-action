@@ -9,7 +9,7 @@ using the job's OIDC token.
 
 Mints the job's GitHub OIDC token and refreshes it for as long as the
 job runs. Exports `FELDERA_OIDC_TOKEN_FILE`, the path of the file that
-holds it. `fda` (0.339.0 or later) reads that file on every invocation,
+holds it. `fda` (0.340.0 or later) reads that file on every invocation,
 so it is authenticated as soon as this action has finished.
 
 Setup: First in your YAML and second adding your trust credentials
@@ -160,6 +160,6 @@ client = FelderaClient(api_key=github_oidc_token)
 | `no OIDC token request URL` | The job is missing `permissions: id-token: write`. A reusable workflow also needs the *calling* job to grant it. |
 | The action fails with `rejected the token` | No trust matches. Compare the trust's `iss`, `sub` and `aud` against the token; a subject pinned to one branch will not match another. |
 | `401` partway through a long run | A client read the file once instead of per request. |
-| `401` from every `fda` call, with a correct trust | An `fda` older than 0.339.0, which reads `FELDERA_AUTH_TOKEN_COMMAND` (v3 of this action) and not the file. |
+| `401` from every `fda` call, with a correct trust | An `fda` older than 0.340.0, which reads `FELDERA_AUTH_TOKEN_COMMAND` (v3 of this action) and not the file. |
 | `cannot be used with '--oidc-token-file'` | The job also sets `FELDERA_API_KEY`; `fda` takes one credential. |
 | `invalid API key` with a correct trust | A client older than 0.327.0 stringifying a callable credential. |
