@@ -4,6 +4,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const {
   REFRESH_SECONDS,
+  fetchWithRetry,
   mintToken,
   tokenFileFor,
   writeToken,
@@ -15,7 +16,7 @@ const {
 async function verify(host, token, audience) {
   let response;
   try {
-    response = await fetch(`${host}/v0/config`, {
+    response = await fetchWithRetry(`${host}/v0/config`, {
       headers: { authorization: `Bearer ${token}` },
     });
   } catch (error) {

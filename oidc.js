@@ -19,6 +19,30 @@ const MAX_REFRESH_SECONDS = 6 * 60 * 60;
 // something other than a token, which must not travel on as a credential.
 const JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
+const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 32000];
+
+function isTransient(status) {
+  return status === 429 || status >= 500;
+}
+
+/** fetch, retrying network errors and 429/5xx answers with doubling delays. */
+async function fetchWithRetry(url, options) {
+  for (const delayMs of RETRY_DELAYS_MS) {
+    let failure;
+    try {
+      const response = await fetch(url, options);
+      if (!isTransient(response.status)) return response;
+      failure = `HTTP ${response.status}`;
+    } catch (error) {
+      failure = error.message;
+    }
+    console.log(`Transient failure (${failure}), retrying in ${delayMs / 1000}s`);
+    await new Promise((done) => setTimeout(done, delayMs));
+  }
+  // The last attempt's failure is the caller's to report.
+  return fetch(url, options);
+}
+
 /** Ask GitHub for an OIDC token for `audience` ("" means GitHub's default). */
 async function mintToken(audience) {
   const requestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
@@ -32,7 +56,7 @@ async function mintToken(audience) {
   const url = audience
     ? `${requestUrl}&audience=${encodeURIComponent(audience)}`
     : requestUrl;
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     headers: { authorization: `bearer ${requestToken}` },
   });
   if (!response.ok) {
@@ -78,6 +102,7 @@ function mask(value) {
 module.exports = {
   REFRESH_SECONDS,
   MAX_REFRESH_SECONDS,
+  fetchWithRetry,
   mintToken,
   tokenFileFor,
   writeToken,
