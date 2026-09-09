@@ -1,10 +1,12 @@
 "use strict";
 
+const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const {
   REFRESH_SECONDS,
   fetchWithRetry,
+  logFileFor,
   mintToken,
   tokenFileFor,
   writeToken,
@@ -67,21 +69,30 @@ async function main() {
     );
   }
 
+  // Discarding the refresher's output leaves a job that dies of expired tokens
+  // with nothing at all to read, so it writes to a file the post step prints.
+  const logFile = logFileFor(tokenFile);
+  fs.writeFileSync(logFile, "", { mode: 0o600 });
+  const logFd = fs.openSync(logFile, "a");
+
   // Detached, so it outlives this step and keeps the file fresh for the whole
   // job. The post step stops it; deleting the file stops it too.
   const refresher = spawn(process.execPath, [path.join(__dirname, "refresh.js")], {
     detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", logFd, logFd],
     env: {
       ...process.env,
       FELDERA_OIDC_TOKEN_FILE: tokenFile,
       FELDERA_OIDC_AUDIENCE: audience,
       FELDERA_OIDC_REFRESH_SECONDS: String(REFRESH_SECONDS),
+      FELDERA_OIDC_REFRESH_LOG: logFile,
     },
   });
   refresher.unref();
+  fs.closeSync(logFd);
   saveState("refresherPid", String(refresher.pid));
   saveState("tokenFile", tokenFile);
+  saveState("logFile", logFile);
   console.log(
     `Wired FELDERA_OIDC_TOKEN_FILE (aud ${audience || "default"}), re-minting every ${REFRESH_SECONDS}s`,
   );

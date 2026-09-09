@@ -1,0 +1,9 @@
+{
+  "name": "feldera-oidc-auth-action",
+  "private": true,
+  "description": "Authenticate to Feldera from GitHub Actions with the job's OIDC token",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

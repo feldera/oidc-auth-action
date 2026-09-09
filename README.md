@@ -159,7 +159,7 @@ client = FelderaClient(api_key=github_oidc_token)
 |---|---|
 | `no OIDC token request URL` | The job is missing `permissions: id-token: write`. A reusable workflow also needs the *calling* job to grant it. |
 | The action fails with `rejected the token` | No trust matches. Compare the trust's `iss`, `sub` and `aud` against the token; a subject pinned to one branch will not match another. |
-| `401` partway through a long run | A client read the file once instead of per request. |
+| `401` partway through a long run | A client read the file once instead of per request. Where it does read per request, check the refresher log the post step printed: a run of failed mints, or a refresher that stopped, leaves an expired token in the file. |
 | `401` from every `fda` call, with a correct trust | An `fda` older than 0.340.0, which reads `FELDERA_AUTH_TOKEN_COMMAND` (v3 of this action) and not the file. |
 | `cannot be used with '--oidc-token-file'` | The job also sets `FELDERA_API_KEY`; `fda` takes one credential. |
 | `invalid API key` with a correct trust | A client older than 0.327.0 stringifying a callable credential. |

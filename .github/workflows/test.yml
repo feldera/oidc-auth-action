@@ -14,6 +14,17 @@ permissions:
   contents: read
 
 jobs:
+  unit:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
+        with:
+          # The action runs on node24, so the tests do too.
+          node-version: 24
+      - run: npm test
+
   oidc-auth:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
